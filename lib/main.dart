@@ -1,122 +1,203 @@
 import 'package:flutter/material.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:audioplayers/audioplayers.dart';
+import 'firebase_options.dart';
 
-void main() {
-  runApp(const MyApp());
+Future<void> _backgroundHandler(RemoteMessage message) async {
+  print("🔥 [Background] Message: ${message.messageId}");
 }
 
-class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
+    FlutterLocalNotificationsPlugin();
 
-  // This widget is the root of your application.
+final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
+
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await Firebase.initializeApp(
+    options: DefaultFirebaseOptions.currentPlatform,
+  );
+  FirebaseMessaging.onBackgroundMessage(_backgroundHandler);
+
+  const AndroidInitializationSettings initializationSettingsAndroid =
+      AndroidInitializationSettings('@drawable/ic_stat_notification'); // JPEG will not work well here
+
+  final InitializationSettings initializationSettings =
+      InitializationSettings(android: initializationSettingsAndroid);
+
+  await flutterLocalNotificationsPlugin.initialize(
+    initializationSettings,
+    onDidReceiveNotificationResponse: (response) {
+      if (response.payload != null) {
+        navigatorKey.currentState?.pushNamed(response.payload!);
+      }
+    },
+  );
+
+  runApp(MessagingApp());
+}
+
+class MessagingApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Flutter Demo',
-      theme: ThemeData(
-        // This is the theme of your application.
-        //
-        // TRY THIS: Try running your application with "flutter run". You'll see
-        // the application has a purple toolbar. Then, without quitting the app,
-        // try changing the seedColor in the colorScheme below to Colors.green
-        // and then invoke "hot reload" (save your changes or press the "hot
-        // reload" button in a Flutter-supported IDE, or press "r" if you used
-        // the command line to start the app).
-        //
-        // Notice that the counter didn't reset back to zero; the application
-        // state is not lost during the reload. To reset the state, use hot
-        // restart instead.
-        //
-        // This works for code too, not just values: Most code changes can be
-        // tested with just a hot reload.
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
-      ),
-      home: const MyHomePage(title: 'Flutter Demo Home Page'),
+      navigatorKey: navigatorKey,
+      title: 'FCM Class Activity',
+      theme: ThemeData(primarySwatch: Colors.blue),
+      routes: {
+        '/important': (_) => ImportantPage(),
+        '/regular': (_) => RegularPage(),
+      },
+      home: MyHomePage(),
     );
   }
 }
 
 class MyHomePage extends StatefulWidget {
-  const MyHomePage({super.key, required this.title});
-
-  // This widget is the home page of your application. It is stateful, meaning
-  // that it has a State object (defined below) that contains fields that affect
-  // how it looks.
-
-  // This class is the configuration for the state. It holds the values (in this
-  // case the title) provided by the parent (in this case the App widget) and
-  // used by the build method of the State. Fields in a Widget subclass are
-  // always marked "final".
-
-  final String title;
-
   @override
   State<MyHomePage> createState() => _MyHomePageState();
 }
 
 class _MyHomePageState extends State<MyHomePage> {
-  int _counter = 0;
+  final AudioPlayer _audioPlayer = AudioPlayer();
+  List<String> _notifications = [];
+  String? _token;
 
-  void _incrementCounter() {
-    setState(() {
-      // This call to setState tells the Flutter framework that something has
-      // changed in this State, which causes it to rerun the build method below
-      // so that the display can reflect the updated values. If we changed
-      // _counter without calling setState(), then the build method would not be
-      // called again, and so nothing would appear to happen.
-      _counter++;
+  @override
+  void initState() {
+    super.initState();
+
+    FirebaseMessaging messaging = FirebaseMessaging.instance;
+
+    messaging.requestPermission();
+    messaging.getToken().then((token) {
+      print("🧪 FCM Token: $token");
+      setState(() {
+        _token = token;
+      });
+    });
+
+    FirebaseMessaging.onMessage.listen((RemoteMessage message) async {
+      print("📥 [Foreground] Message received");
+
+      String type = message.data['notificationType'] ?? 'regular';
+      String route = type == 'important' ? '/important' : '/regular';
+      String body = message.notification?.body ?? 'No body';
+
+      setState(() {
+        _notifications.add(body);
+      });
+
+      if (type == 'important') {
+        await _audioPlayer.play(AssetSource('alert.mp3'));
+
+        showDialog(
+          context: context,
+          builder: (_) => AlertDialog(
+            backgroundColor: Colors.red[100],
+            title: const Text('🚨 Important Notification'),
+            content: Text(body),
+            actions: [
+              TextButton(
+                child: const Text('OK'),
+                onPressed: () => Navigator.pop(context),
+              ),
+            ],
+          ),
+        );
+      } else {
+        showDialog(
+          context: context,
+          builder: (_) => AlertDialog(
+            backgroundColor: Colors.blue[50],
+            title: const Text('🔔 Regular Notification'),
+            content: Text(body),
+            actions: [
+              TextButton(
+                child: const Text('OK'),
+                onPressed: () => Navigator.pop(context),
+              ),
+            ],
+          ),
+        );
+      }
+
+      await flutterLocalNotificationsPlugin.show(
+        0,
+        message.notification?.title ?? 'Notification',
+        message.notification?.body ?? '',
+        NotificationDetails(
+          android: AndroidNotificationDetails(
+            'channel_id',
+            'ClassActivityChannel',
+            icon: '@drawable/ic_stat_notification', // Will be ignored if JPEG!
+            importance: Importance.max,
+            priority: Priority.high,
+          ),
+        ),
+        payload: route,
+      );
+    });
+
+    FirebaseMessaging.onMessageOpenedApp.listen((message) {
+      String type = message.data['notificationType'] ?? 'regular';
+      navigatorKey.currentState?.pushNamed(
+        type == 'important' ? '/important' : '/regular',
+      );
     });
   }
 
   @override
   Widget build(BuildContext context) {
-    // This method is rerun every time setState is called, for instance as done
-    // by the _incrementCounter method above.
-    //
-    // The Flutter framework has been optimized to make rerunning build methods
-    // fast, so that you can just rebuild anything that needs updating rather
-    // than having to individually change instances of widgets.
     return Scaffold(
       appBar: AppBar(
-        // TRY THIS: Try changing the color here to a specific color (to
-        // Colors.amber, perhaps?) and trigger a hot reload to see the AppBar
-        // change color while the other colors stay the same.
-        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-        // Here we take the value from the MyHomePage object that was created by
-        // the App.build method, and use it to set our appbar title.
-        title: Text(widget.title),
+        title: const Text('Firebase Messaging'),
       ),
-      body: Center(
-        // Center is a layout widget. It takes a single child and positions it
-        // in the middle of the parent.
+      body: Padding(
+        padding: const EdgeInsets.all(16),
         child: Column(
-          // Column is also a layout widget. It takes a list of children and
-          // arranges them vertically. By default, it sizes itself to fit its
-          // children horizontally, and tries to be as tall as its parent.
-          //
-          // Column has various properties to control how it sizes itself and
-          // how it positions its children. Here we use mainAxisAlignment to
-          // center the children vertically; the main axis here is the vertical
-          // axis because Columns are vertical (the cross axis would be
-          // horizontal).
-          //
-          // TRY THIS: Invoke "debug painting" (choose the "Toggle Debug Paint"
-          // action in the IDE, or press "p" in the console), to see the
-          // wireframe for each widget.
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: <Widget>[
-            const Text('You have pushed the button this many times:'),
-            Text(
-              '$_counter',
-              style: Theme.of(context).textTheme.headlineMedium,
+          children: [
+            if (_token != null)
+              Text("🔑 Token:\n$_token", style: const TextStyle(fontSize: 12)),
+            const SizedBox(height: 20),
+            const Text("📜 Notification History:", style: TextStyle(fontSize: 16)),
+            Expanded(
+              child: ListView.builder(
+                itemCount: _notifications.length,
+                itemBuilder: (_, index) => ListTile(
+                  title: Text(_notifications[index]),
+                ),
+              ),
             ),
           ],
         ),
       ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _incrementCounter,
-        tooltip: 'Increment',
-        child: const Icon(Icons.add),
-      ), // This trailing comma makes auto-formatting nicer for build methods.
+    );
+  }
+}
+
+class ImportantPage extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text("🚨 Important Page")),
+      body: const Center(
+        child: Text("This is the Important Notification Page."),
+      ),
+    );
+  }
+}
+
+class RegularPage extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text("🔔 Regular Page")),
+      body: const Center(
+        child: Text("This is the Regular Notification Page."),
+      ),
     );
   }
 }
