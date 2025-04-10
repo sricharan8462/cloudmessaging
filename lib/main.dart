@@ -1,151 +1,118 @@
-import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
-import 'package:flutter_local_notifications/flutter_local_notifications.dart';
-import 'package:audioplayers/audioplayers.dart';
-import 'firebase_options.dart';
+import 'package:flutter/material.dart';
 
-Future<void> _backgroundHandler(RemoteMessage message) async {
-  print("🔥 [Background] Message: ${message.messageId}");
+// Background message handler
+Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
+  await Firebase.initializeApp();
+  print('Background message: ${message.notification?.body}');
 }
-
-final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
-    FlutterLocalNotificationsPlugin();
-
-final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await Firebase.initializeApp(
-    options: DefaultFirebaseOptions.currentPlatform,
-  );
-  FirebaseMessaging.onBackgroundMessage(_backgroundHandler);
-
-  const AndroidInitializationSettings initializationSettingsAndroid =
-      AndroidInitializationSettings('@drawable/ic_stat_notification'); // JPEG will not work well here
-
-  final InitializationSettings initializationSettings =
-      InitializationSettings(android: initializationSettingsAndroid);
-
-  await flutterLocalNotificationsPlugin.initialize(
-    initializationSettings,
-    onDidReceiveNotificationResponse: (response) {
-      if (response.payload != null) {
-        navigatorKey.currentState?.pushNamed(response.payload!);
-      }
-    },
-  );
-
-  runApp(MessagingApp());
+  await Firebase.initializeApp();
+  FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
+  runApp(const MyApp());
 }
 
-class MessagingApp extends StatelessWidget {
+class MyApp extends StatelessWidget {
+  const MyApp({super.key});
+
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      navigatorKey: navigatorKey,
-      title: 'FCM Class Activity',
-      theme: ThemeData(primarySwatch: Colors.blue),
-      routes: {
-        '/important': (_) => ImportantPage(),
-        '/regular': (_) => RegularPage(),
-      },
-      home: MyHomePage(),
+      title: 'FCM Tutorial',
+      theme: ThemeData(
+        primarySwatch: Colors.blue,
+      ),
+      home: const HomePage(),
     );
   }
 }
 
-class MyHomePage extends StatefulWidget {
+class HomePage extends StatefulWidget {
+  const HomePage({super.key});
+
   @override
-  State<MyHomePage> createState() => _MyHomePageState();
+  State<HomePage> createState() => _HomePageState();
 }
 
-class _MyHomePageState extends State<MyHomePage> {
-  final AudioPlayer _audioPlayer = AudioPlayer();
-  List<String> _notifications = [];
-  String? _token;
+class _HomePageState extends State<HomePage> {
+  late FirebaseMessaging _messaging;
+  List<Map<String, dynamic>> notificationHistory = [];
+  String? fcmToken;
 
   @override
   void initState() {
     super.initState();
+    setupFirebaseMessaging();
+  }
 
-    FirebaseMessaging messaging = FirebaseMessaging.instance;
+  void setupFirebaseMessaging() async {
+    _messaging = FirebaseMessaging.instance;
 
-    messaging.requestPermission();
-    messaging.getToken().then((token) {
-      print("🧪 FCM Token: $token");
-      setState(() {
-        _token = token;
-      });
+    // Request permission (iOS requires this, Android handles automatically in newer versions)
+    NotificationSettings settings = await _messaging.requestPermission(
+      alert: true,
+      announcement: false,
+      badge: true,
+      carPlay: false,
+      criticalAlert: false,
+      provisional: false,
+      sound: true,
+    );
+    print('User granted permission: ${settings.authorizationStatus}');
+
+    // Get and display FCM token
+    String? token = await _messaging.getToken();
+    setState(() {
+      fcmToken = token;
     });
+    print('FCM Token: $token');
 
-    FirebaseMessaging.onMessage.listen((RemoteMessage message) async {
-      print("📥 [Foreground] Message received");
-
+    // Handle foreground messages
+    FirebaseMessaging.onMessage.listen((RemoteMessage message) {
       String type = message.data['notificationType'] ?? 'regular';
-      String route = type == 'important' ? '/important' : '/regular';
-      String body = message.notification?.body ?? 'No body';
+      String? body = message.notification?.body ?? 'No body';
 
+      // Add to history
       setState(() {
-        _notifications.add(body);
+        notificationHistory.insert(0, {
+          'type': type,
+          'body': body,
+          'timestamp': DateTime.now(),
+        });
       });
 
-      if (type == 'important') {
-        await _audioPlayer.play(AssetSource('alert.mp3'));
-
-        showDialog(
-          context: context,
-          builder: (_) => AlertDialog(
-            backgroundColor: Colors.red[100],
-            title: const Text('🚨 Important Notification'),
-            content: Text(body),
-            actions: [
-              TextButton(
-                child: const Text('OK'),
-                onPressed: () => Navigator.pop(context),
+      // Show dialog
+      showDialog(
+        context: context,
+        builder: (context) => AlertDialog(
+          backgroundColor: type == 'important' ? Colors.red[100] : Colors.blue[100],
+          title: Row(
+            children: [
+              Icon(
+                type == 'important' ? Icons.warning : Icons.info,
+                color: type == 'important' ? Colors.red : Colors.blue,
               ),
+              const SizedBox(width: 8),
+              Text(type == 'important' ? 'Important' : 'Notification'),
             ],
           ),
-        );
-      } else {
-        showDialog(
-          context: context,
-          builder: (_) => AlertDialog(
-            backgroundColor: Colors.blue[50],
-            title: const Text('🔔 Regular Notification'),
-            content: Text(body),
-            actions: [
-              TextButton(
-                child: const Text('OK'),
-                onPressed: () => Navigator.pop(context),
-              ),
-            ],
-          ),
-        );
-      }
-
-      await flutterLocalNotificationsPlugin.show(
-        0,
-        message.notification?.title ?? 'Notification',
-        message.notification?.body ?? '',
-        NotificationDetails(
-          android: AndroidNotificationDetails(
-            'channel_id',
-            'ClassActivityChannel',
-            icon: '@drawable/ic_stat_notification', // Will be ignored if JPEG!
-            importance: Importance.max,
-            priority: Priority.high,
-          ),
+          content: Text(body),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('OK'),
+            ),
+          ],
         ),
-        payload: route,
       );
     });
 
-    FirebaseMessaging.onMessageOpenedApp.listen((message) {
-      String type = message.data['notificationType'] ?? 'regular';
-      navigatorKey.currentState?.pushNamed(
-        type == 'important' ? '/important' : '/regular',
-      );
+    // Handle when app is opened from notification
+    FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
+      print('Message clicked: ${message.notification?.body}');
     });
   }
 
@@ -153,50 +120,39 @@ class _MyHomePageState extends State<MyHomePage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Firebase Messaging'),
+        title: const Text('FCM Tutorial'),
       ),
-      body: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          children: [
-            if (_token != null)
-              Text("🔑 Token:\n$_token", style: const TextStyle(fontSize: 12)),
-            const SizedBox(height: 20),
-            const Text("📜 Notification History:", style: TextStyle(fontSize: 16)),
-            Expanded(
-              child: ListView.builder(
-                itemCount: _notifications.length,
-                itemBuilder: (_, index) => ListTile(
-                  title: Text(_notifications[index]),
-                ),
-              ),
+      body: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.all(8.0),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('FCM Token:', style: TextStyle(fontWeight: FontWeight.bold)),
+                Text(fcmToken ?? 'Loading...', style: const TextStyle(fontSize: 12)),
+              ],
             ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class ImportantPage extends StatelessWidget {
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text("🚨 Important Page")),
-      body: const Center(
-        child: Text("This is the Important Notification Page."),
-      ),
-    );
-  }
-}
-
-class RegularPage extends StatelessWidget {
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text("🔔 Regular Page")),
-      body: const Center(
-        child: Text("This is the Regular Notification Page."),
+          ),
+          const Divider(),
+          const Text('Notification History', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+          Expanded(
+            child: ListView.builder(
+              itemCount: notificationHistory.length,
+              itemBuilder: (context, index) {
+                final notification = notificationHistory[index];
+                return ListTile(
+                  leading: Icon(
+                    notification['type'] == 'important' ? Icons.warning : Icons.info,
+                    color: notification['type'] == 'important' ? Colors.red : Colors.blue,
+                  ),
+                  title: Text(notification['body']),
+                  subtitle: Text(notification['timestamp'].toString()),
+                );
+              },
+            ),
+          ),
+        ],
       ),
     );
   }
